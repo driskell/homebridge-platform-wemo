@@ -36,6 +36,9 @@ Configuration sample:
 
 `homekit_safe` is option, defaults to 1 (true) if you have specified a number of `expected_accessories` or '0' (false) if you have not set an expectation as to the number of accessories. This parameter, when set to true, will cause homebridge to crash and hence not update HomeKit if it doesn't find the nominated number of accessories. See section below.
 
+`port` is optional, defaults to 0 (random available port). This parameter sets the local port to bind to
+when performing discovery of the Wemo devices. It is useful if you are running a firewall.
+
 
  ```javascript
 "platforms": [

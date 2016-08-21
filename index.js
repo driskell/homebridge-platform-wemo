@@ -50,7 +50,8 @@ function WemoPlatform(log, config) {
     this.expectedAccessories = parseInt(config.expected_accessories) || 0; // default to false if not specficied
     this.timeout = config.timeout || 10; // default to 10 seconds if not specified
     this.homekitSafe = (isNaN(parseInt(config.homekit_safe, 10)) ) ? true : parseInt(config.homekit_safe, 10) > 0 ? true : false;
-        
+    this.port = config.port || 0;
+
     // if we have been not been told how many accessories to find then homekit safe is off.
     if(!this.expectedAccessories) { this.homekitSafe = false; }
     
@@ -63,7 +64,7 @@ WemoPlatform.prototype = {
             this.expectedAccessories ? this.expectedAccessories : "an unknown number" , this.timeout);
         var foundAccessories = [];
         var self = this;
-        wemo.discover(function (device) {
+        wemo.discover({unicastBindPort: this.port}, function (device) {
             self.log("Found: %s, type: %s", device.friendlyName, device.deviceType.split(":")[3]);
             if (device.deviceType === Wemo.DEVICE_TYPE.Bridge) { // a wemolink bridge - find bulbs
                 var client = this.client(device , self.log);
