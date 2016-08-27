@@ -15,9 +15,8 @@
 
 "use strict";
 
-var Accessory, Characteristic, PowerConsumption, Service, uuid;
+var Accessory, Characteristic, PowerConsumption, Service, uuid, wemo;
 var Wemo = require('wemo-client');
-var wemo = new Wemo();
 var debug = require('debug')('homebridge-platform-wemo');
 
 var noMotionTimer;
@@ -39,6 +38,7 @@ module.exports = function (homebridge) {
 
         this.value = this.getDefaultValue();
     };
+    PowerConsumption.GUID = 'AE48F447-E065-4B31-8050-8FB06DB9E087';
     require('util').inherits(PowerConsumption, Characteristic);
 
     homebridge.registerPlatform("homebridge-platform-wemo", "BelkinWeMo", WemoPlatform);
@@ -56,6 +56,8 @@ function WemoPlatform(log, config) {
     if(!this.expectedAccessories) { this.homekitSafe = false; }
     
     noMotionTimer = config.no_motion_timer || 60;
+
+    wemo = new Wemo({port: this.port});
 }
 
 WemoPlatform.prototype = {
