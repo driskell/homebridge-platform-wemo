@@ -176,6 +176,86 @@ WemoPlatform.prototype._lookupAndVerifyDeviceType = function (deviceId, deviceTy
 };
 
 //
+// Transition utilities
+//
+
+// Get a transition status from the transition table
+function _utilGetTransition(characteristic) {
+  if (!this.transitions) {
+    this.transitions = new Map();
+  }
+
+  var transition = this.transitions.get(characteristic.UUID);
+  if (!transition) {
+    transition = {};
+    this.transitions.set(characteristic.UUID, transition);
+  }
+
+  return transition;
+}
+
+// Handle an internal update, checking for active transitions
+function _utilUpdateInternal(characteristic, value, quiet) {
+  var transition = _utilGetTransition.call(this, characteristic),
+      characteristicObj = this.service.getCharacteristic(characteristic);
+
+  // Are we transitioning?
+  if (!transition.isRunning) {
+    // Compare with the existing value so we avoid unnecessary changes and logging
+    // This is valid as HAP-NodeJS documents cacheable value as accessible directly
+    // We don't call getValue as it triggers our listeners
+    if (characteristicObj.value == value) {
+      return;
+    }
+
+    // Log only if we're not a 'noisy' event (like power usage that happens every second)
+    if (!quiet) {
+      this.log('Updating %s characteristic to %s', characteristicObj.displayName, value);
+    }
+
+    // Set the value with internal context so our listeners ignores it but so we
+    // still trigger change events to propogate to remote listeners (accessing
+    // the cached value propertly directly doesn't do this)
+    characteristicObj.setValue(value, null, '_internal');
+    return;
+  }
+
+  this.log('Deferring %s characteristic update to %s as it is currently transitioning', characteristicObj.displayName, value);
+  transition.deferred = value;
+}
+
+// Begin transition of a characteristic
+// Prevents internal updates from taking effect until a second after the
+// transition completes, to prevent flicking of states while status converges
+function _utilBeginTransition(characteristic, callback) {
+  var transition = _utilGetTransition.call(this, characteristic);
+
+  transition.isRunning = true;
+
+  // If we have a deferred timeout running already, clear it
+  if (transition.deferredTimeout !== undefined) {
+    clearTimeout(transition.deferredTimeout);
+    transition.deferredTimeout = undefined;
+  }
+
+  return function (err) {
+    // Set a timer to update to any deferred value after a small timeout that
+    // will hopefully be long enough for events to converge on the desired state
+    transition.deferredTimeout = setTimeout(function () {
+      transition.isRunning = false;
+      if (transition.deferred === undefined) {
+        return;
+      }
+
+      this._updateInternal(characteristic, transition.deferred);
+      transition.deferred = undefined;
+    }.bind(this), 2000);
+
+    callback(err);
+  }.bind(this);
+}
+
+//
 // Wemo Accessory
 //
 
@@ -215,6 +295,10 @@ function WemoAccessory(platform, log, name, deviceId, deviceType, deviceData, pl
         this.platform.api.registerPlatformAccessories('homebridge-platform-wemo', 'BelkinWeMo', [this.platformAccessory]);
     }
 }
+
+// Transition utilities
+WemoAccessory.prototype._updateInternal = _utilUpdateInternal;
+WemoAccessory.prototype._beginTransition = _utilBeginTransition;
 
 // Called to configure the internal device data and update info characteristics
 WemoAccessory.prototype._setDeviceData = function (deviceData) {
@@ -337,13 +421,6 @@ WemoAccessory.prototype._configureServices = function () {
     this.log('Device type is not implemented: %s', this.deviceType);
 };
 
-// Update a characteristic value with _internal context
-WemoAccessory.prototype._updateInternal = function (characteristic, value) {
-    this.service
-        .getCharacteristic(characteristic)
-        .setValue(value, null, '_internal');
-};
-
 // Configure wemo-client event listeners to update our internal state when things
 // change
 WemoAccessory.prototype._configureListeners = function () {
@@ -356,11 +433,12 @@ WemoAccessory.prototype._configureListeners = function () {
             this.deviceType === Wemo.DEVICE_TYPE.Switch ||
             this.deviceType === Wemo.DEVICE_TYPE.LightSwitch) {
         this.client.on('binaryState', function (state) {
+            this.log('State is now %s', state);
             this._updateInternal(Characteristic.On, state > 0);
 
             if (this.deviceType === Wemo.DEVICE_TYPE.Insight) {
                 this._updateInternal(Characteristic.OutletInUse, false);
-                this._updateInternal(PowerConsumption, 0);
+                this._updateInternal(PowerConsumption, 0, true);
             }
         }.bind(this));
 
@@ -369,7 +447,7 @@ WemoAccessory.prototype._configureListeners = function () {
                 this.insightInUse = state == 1;
                 this.insightPowerUsage = Math.round(power / 100) / 10;
                 this._updateInternal(Characteristic.OutletInUse, this.insightInUse);
-                this._updateInternal(PowerConsumption, this.insightPowerUsage);
+                this._updateInternal(PowerConsumption, this.insightPowerUsage, true);
             }.bind(this));
         }
         return;
@@ -394,17 +472,17 @@ WemoAccessory.prototype._handleStatusChange = function (deviceId, capabilityId, 
     switch(capabilityId) {
         case '10008': // this is a brightness change
             var newBrightness = Math.round(value.split(':').shift() / 255 * 100 );
-            this.log('Updating brightness characteristic for %s to %s', this.name, newBrightness);
+            this.log('Brightness is now %s', newBrightness);
             this._updateInternal(Characteristic.Brightness, newbrightness);
             break;
         case '10006': // on/off/etc
             // reflect change of onState from potentially and external change (from Wemo App for instance)
             var newState = this._capabilities['10006'].substr(0,1) === '1' ? true : false;
-            this.log('Updating on characteristic for %s to %s', this.name, newState);
+            this.log('State is now %s', newState);
             this._updateInternal(Characteristic.On, newState);
             break;
         default:
-            this.log('Capability ID %s is not implemented (notified by %s)', capabilityId, this.name);
+            this.log('Capability ID %s is not implemented', capabilityId);
             break;
     }
 };
@@ -416,6 +494,11 @@ WemoAccessory.prototype.setOn = function (value, callback, context) {
         callback(null);
         return;
     }
+
+    // Flag a transition happening that will allow a delay before allowing
+    // internal updates to propogate, giving them time to catch up and prevent
+    // flickering switch states
+    callback = this._beginTransition(Characteristic.On, callback);
 
     this.log('Setting state to %s', value);
 
@@ -457,6 +540,9 @@ WemoAccessory.prototype.getPowerUsage = function (callback) {
 
 // Set light on status
 WemoAccessory.prototype.setOnStatus = function (value, callback) {
+    // Flag a transition to prevent flickering statuses
+    callback = this._beginTransition(Characteristic.On, callback);
+
     this.log('Setting light state to: %s', value);
 
     this.client.setDeviceStatus(this.deviceId, 10006, value ? 1 : 0, function (err) {
@@ -517,6 +603,8 @@ WemoAccessory.prototype.getOnStatus = function (callback) {
 };
 
 WemoAccessory.prototype.setBrightness = function (value, callback) {
+    callback = this._beginTransition(Characteristic.Brightness, callback);
+
     this.log('Setting light brightness to: %s%%', value);
 
     this.client.setDeviceStatus(this.deviceId, 10008, value * 255 / 100, function (err) {
