@@ -556,7 +556,7 @@ WemoAccessory.prototype.setOnStatus = function (value, callback) {
 
     this.log('Setting light state to: %s', value);
 
-    this.client.setDeviceStatus(this.deviceId, 10006, value ? 1 : 0, function (err) {
+    this.client.setDeviceStatus(this.deviceId, 10006, this._convertToCapability10006(value), function (err) {
         if (err) {
           this.log('Failed to set light state to %s: %s', value, err);
           callback(err);
@@ -607,7 +607,7 @@ WemoAccessory.prototype.getOnStatus = function (callback) {
             return;
         }
 
-        var state = capabilities['10006'].substr(0,1) === '1' ? true : false;
+        var state = this._parseCapability10006(capabilities['10006']).state;
         this.log('Current light status: %s', state);
         callback(null, state);
     });
@@ -618,7 +618,9 @@ WemoAccessory.prototype.setBrightness = function (value, callback) {
 
     this.log('Setting light brightness to: %s%%', value);
 
-    this.client.setDeviceStatus(this.deviceId, 10008, value * 255 / 100, function (err) {
+    // Value is a brightness value between 0 and 255
+    // Homekit expects between 0 and 100
+    this.client.setDeviceStatus(this.deviceId, 10008, this._convertToCapability10008(value), function (err) {
         if (err) {
             this.log('Failed to set light brightness to %s%%: %s', value, err);
             callback(err);
@@ -630,6 +632,49 @@ WemoAccessory.prototype.setBrightness = function (value, callback) {
     }.bind(this));
 };
 
+// Get wemo light power value for a homekit value
+WemoAccessory.prototype._convertToCapability10006 = function (value) {
+    return value ? 1 : 0;
+};
+
+// Get wemo brightness value for a homekit value
+WemoAccessory.prototype._convertToCapability10008 = function (value) {
+    // Wemo brightness is 0 to 255 - homekit is 0 to 100
+    return value * 255 / 100;
+};
+
+// Parse a Wemo light power status
+WemoAccessory.prototype._parseCapability10006 = function (value) {
+    // It's a colon separated value list
+    return {
+        // First value is power state
+        // It is either 1 or 0
+        state: value.substr(0, 1) === '1'
+    };
+};
+
+// Parse a Wemo light brightness status
+WemoAccessory.prototype._parseCapability10008 = function (value) {
+    // It's a colon separated value list
+    return {
+        // First value is brightness
+        // Wemo brightness is 0 to 255 - homekit is 0 to 100
+        brightness: Math.round(value.split(':').shift() / 255 * 100)
+    };
+};
+
+// Convert milliwatt to watt
+WemoAccessory.prototype._convertConsumption = function (value) {
+    var power = power / 1000;
+    return Math.round(power * 100) / 100;
+};
+
+// Convert milliwatt minutes into kilo watt hours
+WemoAccessory.prototype._convertTotalConsumption = function (value) {
+    var kwh = value / 1000000 / 60;
+    return Math.round(kwh * 100) / 100;
+};
+
 // Get light brightness
 WemoAccessory.prototype.getBrightness = function (callback) {
     this._getStatus(function (err, capabilities) {
@@ -638,7 +683,7 @@ WemoAccessory.prototype.getBrightness = function (callback) {
             return;
         }
 
-        var brightness = Math.round(capabilities['10008'].split(':').shift() / 255 * 100);
+        var brightness = this._parseCapability10008(capabilities['10008']).brightness;
         this.log('Current light brightness: %s', brightness);
         callback(null, brightness);
     });
@@ -654,16 +699,16 @@ WemoAccessory.prototype._handleStatusChange = function (deviceId, capabilityId, 
     }
 
     switch (capabilityId) {
-        case '10008': // this is a brightness change
-            var newBrightness = Math.round(value.split(':').shift() / 255 * 100 );
-            this.log('Brightness is now %s', newBrightness);
-            this._updateInternal(Characteristic.Brightness, newbrightness);
-            break;
         case '10006': // on/off/etc
             // reflect change of onState from potentially and external change (from Wemo App for instance)
-            var newState = this._capabilities['10006'].substr(0,1) === '1' ? true : false;
+            var newState = this._parseCapability10006(value).state;
             this.log('State is now %s', newState);
             this._updateInternal(Characteristic.On, newState);
+            break;
+        case '10008': // this is a brightness change
+            var newBrightness = this._parseCapability10008(value).brightness;
+            this.log('Brightness is now %s', newBrightness);
+            this._updateInternal(Characteristic.Brightness, newbrightness);
             break;
         default:
             this.log('Capability ID %s is not implemented', capabilityId);
@@ -690,8 +735,8 @@ WemoAccessory.prototype._handleBinaryState = function (state) {
 // Handle Insight params
 WemoAccessory.prototype._handleInsightParams = function (state, power, data) {
     this.insightInUse = state == 1;
-    this.insightPowerUsage = Math.round(power / 100) / 10;
-    this.insightTotalUsage = Math.round(data.TodayConsumed / 10000 * 6) / 100;
+    this.insightPowerUsage = this._convertConsumption(power);
+    this.insightTotalUsage = this._convertTotalConsumption(data.TodayConsumed);
     this._updateInternal(Characteristic.OutletInUse, this.insightInUse);
     this._updateInternal(Consumption, this.insightPowerUsage, true);
     this._updateInternal(TotalConsumption, this.insightTotalUsage, true);
