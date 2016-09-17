@@ -8,7 +8,7 @@
 //      }
 // ],
 
-var PlatformAccessory, Characteristic, Consumption, Service, UUIDGen, wemo;
+var PlatformAccessory, Characteristic, Consumption, TotalConsumption, Service, UUIDGen, wemo;
 var inherits = require('util').inherits;
 var Wemo = require('wemo-client');
 var debug = require('debug')('homebridge-platform-wemo');
@@ -32,6 +32,22 @@ module.exports = function (homebridge) {
     inherits(Consumption, Characteristic);
 
     Consumption.UUID = 'E863F10D-079E-48FF-8F27-9C2605A29F52';
+
+    TotalConsumption = function() {
+        Characteristic.call(this, 'Total Consumption', 'E863F10C-079E-48FF-8F27-9C2605A29F52');
+
+        this.setProps({
+            format: Characteristic.Formats.UINT32,
+            unit: 'kWh',
+            perms: [Characteristic.Perms.READ, Characteristic.Perms.NOTIFY]
+        });
+
+        this.value = this.getDefaultValue();
+    };
+
+    inherits(TotalConsumption, Characteristic);
+
+    TotalConsumption.UUID = 'E863F10C-079E-48FF-8F27-9C2605A29F52';
 
     homebridge.registerPlatform('homebridge-platform-wemo', 'BelkinWeMo', WemoPlatform, true);
 };
@@ -399,10 +415,27 @@ WemoAccessory.prototype._configureServices = function () {
                 .on('get', this.getInUse.bind(this));
             this._addOrGetCharacteristic(Consumption)
                 .on('get', this.getPowerUsage.bind(this));
+            this._addOrGetCharacteristic(TotalConsumption)
+                .on('get', this.getTotalUsage.bind(this));
 
             this.insightInUse = false;
             this.insightPowerUsage = 0;
+            this.insightTotalUsage = 0;
         }
+
+        return;
+    }
+
+    if (this.deviceType === Wemo.DEVICE_TYPE.Maker) {
+        this.service
+            .getCharacteristic(Characteristic.On)
+            .on('set', this.setOn.bind(this))
+            .on('get', this.getOn.bind(this));
+
+        this._addOrGetCharacteristic(Characteristic.ContactSensorState)
+            .on('get', this.getContactSensorState.bind(this));
+
+        this.makerContactSensorState = 0;
 
         return;
     }
@@ -432,58 +465,26 @@ WemoAccessory.prototype._configureListeners = function () {
     if (this.deviceType === Wemo.DEVICE_TYPE.Insight ||
             this.deviceType === Wemo.DEVICE_TYPE.Switch ||
             this.deviceType === Wemo.DEVICE_TYPE.LightSwitch) {
-        this.client.on('binaryState', function (state) {
-            this.log('State is now %s', state);
-            this._updateInternal(Characteristic.On, state > 0);
-
-            if (this.deviceType === Wemo.DEVICE_TYPE.Insight && state <= 0) {
-                this._updateInternal(Characteristic.OutletInUse, false);
-                this._updateInternal(Consumption, 0, true);
-            }
-        }.bind(this));
+        this.client.on('binaryState', this._handleBinaryState.bind(this));
 
         if (this.deviceType === Wemo.DEVICE_TYPE.Insight) {
-            this.client.on('insightParams', function (state, power) {
-                this.insightInUse = state == 1;
-                this.insightPowerUsage = Math.round(power / 100) / 10;
-                this._updateInternal(Characteristic.OutletInUse, this.insightInUse);
-                this._updateInternal(Consumption, this.insightPowerUsage, true);
-            }.bind(this));
+            this.client.on('insightParams', this._handleInsightParams.bind(this));
         }
+
         return;
     }
 
-    if (this.deviceType === Wemo.DEVICE_TYPE.Motion) {
-      this.client.on('binaryState', function (state) {
-          this._motionStateChange(state > 0);
-      }.bind(this));
-    }
-};
-
-// Handle status change for Wemo light bulbs
-WemoAccessory.prototype._handleStatusChange = function (deviceId, capabilityId, value) {
-    // We create separate accessory for each bulb, but they are in fact a group
-    // and when each bulb accessory registers for events it gets events for all bulbs
-    // Compare deviceId to check we are the correct accessory to handle this event
-    if (deviceId != this.deviceId) {
-        return;
+    if (this.deviceType === Wemo.DEVICE_TYPE.Maker) {
+        // TODO: For maker, does getBinaryState also work? Can someone find out?
+        this.client.on('binaryState', function (state) {
+            this.log('NOTICE - Maker device is responding to binaryState, please raise an issue to let me know! Value: %s', state);
+        }.bind(this));
+        this.client.on('attributeList', this._handleMakerAttributeList.bind(this));
     }
 
-    switch(capabilityId) {
-        case '10008': // this is a brightness change
-            var newBrightness = Math.round(value.split(':').shift() / 255 * 100 );
-            this.log('Brightness is now %s', newBrightness);
-            this._updateInternal(Characteristic.Brightness, newbrightness);
-            break;
-        case '10006': // on/off/etc
-            // reflect change of onState from potentially and external change (from Wemo App for instance)
-            var newState = this._capabilities['10006'].substr(0,1) === '1' ? true : false;
-            this.log('State is now %s', newState);
-            this._updateInternal(Characteristic.On, newState);
-            break;
-        default:
-            this.log('Capability ID %s is not implemented', capabilityId);
-            break;
+    if (this.deviceType === Wemo.DEVICE_TYPE.Motion ||
+            this.deviceType === 'urn:Belkin:device:NetCamSensor:1') {
+        this.client.on('binaryState', this._motionStateChange.bind(this));
     }
 };
 
@@ -528,14 +529,24 @@ WemoAccessory.prototype.getOn = function (callback) {
     }.bind(this));
 };
 
-// Get in use from cached insightParams (there is no on-demand GET)
+// TODO: Get in use from cached insightParams (there is no on-demand GET yet)
 WemoAccessory.prototype.getInUse = function (callback) {
     callback(null, this.insightInUse);
 };
 
-// Get power usage from cached insightParams (there is no on-demand GET)
+// TODO: Get power usage from cached insightParams (there is no on-demand GET yet)
 WemoAccessory.prototype.getPowerUsage = function (callback) {
     callback(null, this.insightPowerUsage);
+};
+
+// TODO: Get total usage from cached insightParams (there is no on-demand GET yet)
+WemoAccessory.prototype.getTotalUsage = function (callback) {
+    callback(null, this.insightTotalUsage);
+};
+
+// TODO: Get contact sensor state from cached parameters (there is no on-demand GET yet)
+WemoAccessory.prototype.getContactSensorState = function (callback) {
+    callback(null, this.makerContactSensorState);
 };
 
 // Set light on status
@@ -633,9 +644,84 @@ WemoAccessory.prototype.getBrightness = function (callback) {
     });
 };
 
+// Handle status change for Wemo light bulbs
+WemoAccessory.prototype._handleStatusChange = function (deviceId, capabilityId, value) {
+    // We create separate accessory for each bulb, but they are in fact a group
+    // and when each bulb accessory registers for events it gets events for all bulbs
+    // Compare deviceId to check we are the correct accessory to handle this event
+    if (deviceId != this.deviceId) {
+        return;
+    }
+
+    switch (capabilityId) {
+        case '10008': // this is a brightness change
+            var newBrightness = Math.round(value.split(':').shift() / 255 * 100 );
+            this.log('Brightness is now %s', newBrightness);
+            this._updateInternal(Characteristic.Brightness, newbrightness);
+            break;
+        case '10006': // on/off/etc
+            // reflect change of onState from potentially and external change (from Wemo App for instance)
+            var newState = this._capabilities['10006'].substr(0,1) === '1' ? true : false;
+            this.log('State is now %s', newState);
+            this._updateInternal(Characteristic.On, newState);
+            break;
+        default:
+            this.log('Capability ID %s is not implemented', capabilityId);
+            break;
+    }
+};
+
+// Handle binary state
+WemoAccessory.prototype._handleBinaryState = function (state) {
+    this.log('State is now %s', state);
+    this._updateInternal(Characteristic.On, state > 0);
+
+    // Only reset the outlet in use and consumption when turning off
+    // This ensures we do reset even if no events are streaming
+    // TODO: Is this even needed? Maybe we always received events, and I have
+    // noticed that it can take a few events for the consumption to get to 0
+    // so most of the time this reset is ineffective
+    if (this.deviceType === Wemo.DEVICE_TYPE.Insight && state <= 0) {
+        this._updateInternal(Characteristic.OutletInUse, false);
+        this._updateInternal(Consumption, 0, true);
+    }
+};
+
+// Handle Insight params
+WemoAccessory.prototype._handleInsightParams = function (state, power, data) {
+    this.insightInUse = state == 1;
+    this.insightPowerUsage = Math.round(power / 100) / 10;
+    this.insightTotalUsage = Math.round(data.TodayConsumed / 10000 * 6) / 100;
+    this._updateInternal(Characteristic.OutletInUse, this.insightInUse);
+    this._updateInternal(Consumption, this.insightPowerUsage, true);
+    this._updateInternal(TotalConsumption, this.insightTotalUsage, true);
+};
+
+// Handle Maker attribute list
+WemoAccessory.prototype._handleMakerAttributeList = function (name, value, prevalue, timestamp) {
+    switch(name) {
+        case 'Switch':
+            var newState = value > 0;
+            this.log('State is now %s', newState);
+            this._updateInternal(Characteristic.On, newState);
+            break;
+        case 'Sensor':
+            var newContactSensorState = value > 0 ?
+                Characteristic.ContactSensorState.CONTACT_NOT_DETECTED :
+                Characteristic.ContactSensorState.CONTACT_DETECTED;
+            this.log('Contact sensor state is now %s', newContactSensorState);
+            this.makerContactSensorState = newContactSensorState;
+            this._updateInternal(Characteristic.ContactSensorState, newContactSensorState);
+            break;
+        default:
+            this.log('Maker attribute %s is not implemented', name);
+            break;
+    }
+};
+
 // Handle motion timer
 WemoAccessory.prototype._motionStateChange = function (state) {
-    if (state) {
+    if (state > 0) {
         this.log('Motion detected - setting motion characteristic to: true');
 
         // Motion detected - if within the motion timer period since last motion
