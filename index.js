@@ -436,7 +436,7 @@ WemoAccessory.prototype._configureListeners = function () {
             this.log('State is now %s', state);
             this._updateInternal(Characteristic.On, state > 0);
 
-            if (this.deviceType === Wemo.DEVICE_TYPE.Insight) {
+            if (this.deviceType === Wemo.DEVICE_TYPE.Insight && state <= 0) {
                 this._updateInternal(Characteristic.OutletInUse, false);
                 this._updateInternal(Consumption, 0, true);
             }
