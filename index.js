@@ -8,7 +8,7 @@
 //      }
 // ],
 
-var PlatformAccessory, Characteristic, PowerConsumption, Service, UUIDGen, wemo;
+var PlatformAccessory, Characteristic, Consumption, Service, UUIDGen, wemo;
 var inherits = require('util').inherits;
 var Wemo = require('wemo-client');
 var debug = require('debug')('homebridge-platform-wemo');
@@ -19,8 +19,8 @@ module.exports = function (homebridge) {
     Characteristic = homebridge.hap.Characteristic;
     UUIDGen = homebridge.hap.uuid;
 
-    PowerConsumption = function() {
-        Characteristic.call(this, 'Power Consumption', 'AE48F447-E065-4B31-8050-8FB06DB9E087');
+    Consumption = function() {
+        Characteristic.call(this, 'Consumption', 'E863F10D-079E-48FF-8F27-9C2605A29F52');
         this.setProps({
             format: Characteristic.Formats.FLOAT,
             unit: 'W',
@@ -29,9 +29,9 @@ module.exports = function (homebridge) {
         this.value = this.getDefaultValue();
     };
 
-    inherits(PowerConsumption, Characteristic);
+    inherits(Consumption, Characteristic);
 
-    PowerConsumption.UUID = 'AE48F447-E065-4B31-8050-8FB06DB9E087';
+    Consumption.UUID = 'E863F10D-079E-48FF-8F27-9C2605A29F52';
 
     homebridge.registerPlatform('homebridge-platform-wemo', 'BelkinWeMo', WemoPlatform, true);
 };
@@ -397,7 +397,7 @@ WemoAccessory.prototype._configureServices = function () {
         if (this.deviceType === Wemo.DEVICE_TYPE.Insight) {
             this._addOrGetCharacteristic(Characteristic.OutletInUse)
                 .on('get', this.getInUse.bind(this));
-            this._addOrGetCharacteristic(PowerConsumption)
+            this._addOrGetCharacteristic(Consumption)
                 .on('get', this.getPowerUsage.bind(this));
 
             this.insightInUse = false;
@@ -438,7 +438,7 @@ WemoAccessory.prototype._configureListeners = function () {
 
             if (this.deviceType === Wemo.DEVICE_TYPE.Insight) {
                 this._updateInternal(Characteristic.OutletInUse, false);
-                this._updateInternal(PowerConsumption, 0, true);
+                this._updateInternal(Consumption, 0, true);
             }
         }.bind(this));
 
@@ -447,7 +447,7 @@ WemoAccessory.prototype._configureListeners = function () {
                 this.insightInUse = state == 1;
                 this.insightPowerUsage = Math.round(power / 100) / 10;
                 this._updateInternal(Characteristic.OutletInUse, this.insightInUse);
-                this._updateInternal(PowerConsumption, this.insightPowerUsage, true);
+                this._updateInternal(Consumption, this.insightPowerUsage, true);
             }.bind(this));
         }
         return;
