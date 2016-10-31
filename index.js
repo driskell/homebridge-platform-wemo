@@ -496,6 +496,12 @@ WemoAccessory.prototype.setOn = function (value, callback, context) {
         return;
     }
 
+    if (!this.client) {
+        this.log('Ignoring request; Wemo device jas not yet been discovered.');
+        callback(new Error('Wemo has not been discovered yet.'));
+        return;
+    }
+
     // Flag a transition happening that will allow a delay before allowing
     // internal updates to propogate, giving them time to catch up and prevent
     // flickering switch states
@@ -517,6 +523,12 @@ WemoAccessory.prototype.setOn = function (value, callback, context) {
 
 // Get current on status
 WemoAccessory.prototype.getOn = function (callback) {
+    if (!this.client) {
+        this.log('Ignoring request; Wemo device jas not yet been discovered.');
+        callback(new Error('Wemo has not been discovered yet.'));
+        return;
+    }
+
     this.client.getBinaryState(function (err, state) {
         if (err) {
             this.log('Failed to get current state for %s: %s', this.name, err);
@@ -551,6 +563,12 @@ WemoAccessory.prototype.getContactSensorState = function (callback) {
 
 // Set light on status
 WemoAccessory.prototype.setOnStatus = function (value, callback) {
+    if (!this.client) {
+        this.log('Ignoring request; Wemo device jas not yet been discovered.');
+        callback(new Error('Wemo has not been discovered yet.'));
+        return;
+    }
+
     // Flag a transition to prevent flickering statuses
     callback = this._beginTransition(Characteristic.On, callback);
 
@@ -570,6 +588,12 @@ WemoAccessory.prototype.setOnStatus = function (value, callback) {
 
 // Get status from light bridge and allow multiple listeners
 WemoAccessory.prototype._getStatus = function (callback) {
+    if (!this.client) {
+        this.log('Ignoring request; Wemo device jas not yet been discovered.');
+        callback(new Error('Wemo has not been discovered yet.'));
+        return;
+    }
+
     // Request already in progress?
     if (this.isRequestingStatus) {
         // Add on extra callbacks
@@ -614,6 +638,12 @@ WemoAccessory.prototype.getOnStatus = function (callback) {
 };
 
 WemoAccessory.prototype.setBrightness = function (value, callback) {
+    if (!this.client) {
+        this.log('Ignoring request; Wemo device jas not yet been discovered.');
+        callback(new Error('Wemo has not been discovered yet.'));
+        return;
+    }
+
     callback = this._beginTransition(Characteristic.Brightness, callback);
 
     this.log('Setting light brightness to: %s%%', value);
